@@ -78,6 +78,9 @@ unwind_header=unwind-generic.h
 # Set default cpu_type so it can be updated in each machine entry.
 cpu_type=`echo ${host} | sed 's/-.*$//'`
 case ${host} in
+sra32*-*-*)
+	cpu_type=sra32
+	;;
 m32c*-*-*)
         cpu_type=m32c
 	tmake_file=t-fdpbit

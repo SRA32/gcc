@@ -355,6 +355,9 @@ aarch64*-*-*)
 	target_gtfiles="\$(srcdir)/config/aarch64/aarch64-builtins.h \$(srcdir)/config/aarch64/aarch64-builtins.cc \$(srcdir)/config/aarch64/aarch64-sve-builtins.h \$(srcdir)/config/aarch64/aarch64-sve-builtins.cc"
 	target_has_targetm_common=yes
 	;;
+sra32*-*-*)
+	cpu_type=sra32
+	;;
 alpha*-*-*)
 	cpu_type=alpha
 	extra_options="${extra_options} g.opt"
@@ -1279,6 +1282,10 @@ aarch64*-wrs-vxworks*)
         tm_file="${tm_file} vx-common.h vxworks.h aarch64/aarch64-vxworks.h"
         tmake_file="${tmake_file} aarch64/t-aarch64 aarch64/t-aarch64-vxworks"
         ;;
+sra32-*-elf)
+	tm_file="elfos.h newlib-stdint.h ${tm_file}"
+	tmake_file="sra32/t-sra32"
+	;;
 alpha*-*-linux*)
 	tm_file="elfos.h ${tm_file} alpha/elf.h alpha/linux.h alpha/linux-elf.h glibc-stdint.h"
 	tmake_file="${tmake_file} alpha/t-linux alpha/t-alpha"
