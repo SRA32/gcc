@@ -29,12 +29,12 @@
 
 #undef LIB_SPEC
 #define LIB_SPEC "%{!shared:%{!symbolic:-lc}} \
-		   %{mcompress:--relax} \
-		   %{msim:-Tsim.ld}"
+                   %{mcompress:--relax} \
+                   %{msim:-Tsim.ld}"
 
 #undef  LINK_SPEC
 #define LINK_SPEC "%{h*} %{v:-V} \
-		   %{static:-Bstatic} %{shared:-shared} %{symbolic:-Bsymbolic}"
+                   %{static:-Bstatic} %{shared:-shared} %{symbolic:-Bsymbolic}"
 
 #define REGISTER_NAMES {          \
   "$x0", "$rp", "$sp", "$fp",     \
@@ -66,15 +66,15 @@
 
 // Only x0, rp, sp, fp, and CC are fixed
 #define FIXED_REGISTERS { 1, 1, 1, 1, \
-			  0, 0, 0, 0, \
-			  0, 0, 0, 0, \
-			  0, 0, 0, 0, \
-			  0, 0, 0, 0, \
-			  0, 0, 0, 0, \
-			  0, 0, 0, 0, \
-			  0, 0, 0, 0, 1, 1 }
+                          0, 0, 0, 0, \
+                          0, 0, 0, 0, \
+                          0, 0, 0, 0, \
+                          0, 0, 0, 0, \
+                          0, 0, 0, 0, \
+                          0, 0, 0, 0, \
+                          0, 0, 0, 0, 1, 1 }
 
-// x0-fp, r0-r14 caller-saved (1), r15-r27 are callee-saved (0)
+// x0-fp, r15-r27 are caller-saved
 #define CALL_USED_REGISTERS { 1, 1, 1, 1, \
 			      1, 1, 1, 1, \
 			      1, 1, 1, 1, \
@@ -157,6 +157,12 @@ enum reg_class
 #define RODATA_SECTION_ASM_OP "\t.rodata"
 #define BSS_SECTION_ASM_OP    "\t.bss"
 
+#define ASM_OUTPUT_REG_PUSH(STREAM, REGNO) \
+  fprintf (STREAM, "\tpush\t%d\n", REGNO)
+
+#define ASM_OUTPUT_REG_POP(STREAM, REGNO) \
+  fprintf (STREAM, "\tpop\t%d\n", REGNO)
+
 #define ASM_OUTPUT_ALIGN(STREAM,POWER) \
   fprintf (STREAM, "\t.align\t%d\n", POWER);
 
@@ -167,12 +173,16 @@ enum reg_class
 
 #define CUMULATIVE_ARGS unsigned int
 
-#define ACCUMULATE_OUTGOING_ARGS 1
+#define ACCUMULATE_OUTGOING_ARGS 0
 
 #define INIT_CUMULATIVE_ARGS(CUM,FNTYPE,LIBNAME,FNDECL,N_NAMED_ARGS) \
   (CUM = 0)
 
 /* STACK AND CALLING */
+
+#define PUSH_ARGS 1
+
+#define PUSH_ROUNDING(BYTES)  (BYTES) 
 
 #define STACK_GROWS_DOWNWARD 1
 
@@ -258,7 +268,7 @@ do { \
 #define INITIAL_ELIMINATION_OFFSET(FROM, TO, OFFSET) \
   ((OFFSET) = sra32_initial_elimination_offset ((FROM), (TO)))
 
-/* Registers R15-R27 are used for arguments when calling. */
+/* Registers R15-R27 can be used for arguments when calling. */
 #define FUNCTION_ARG_REGNO_P(r) (r >= R15_REGNUM && r <= R27_REGNUM)
 
 #define HARD_REGNO_OK_FOR_BASE_P(REGNO) \

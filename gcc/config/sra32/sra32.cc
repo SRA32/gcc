@@ -41,7 +41,6 @@
     } while (0)
 
 #define SRA32_MAX_IMM12  2047
-#define TMP_REGNUM R27_REGNUM
 
 /* Worker function for TARGET_CAN_ELIMINATE.  */
 
@@ -65,13 +64,18 @@ sra32_function_value (const_tree valtype,
 		      const_tree fntype_or_decl ATTRIBUTE_UNUSED,
 		      bool outgoing ATTRIBUTE_UNUSED)
 {
-  return gen_rtx_REG (TYPE_MODE (valtype), R0_REGNUM);
+  machine_mode mode = TYPE_MODE (valtype);
+  if (GET_MODE_CLASS (mode) == MODE_INT && GET_MODE_SIZE (mode) < UNITS_PER_WORD)
+    mode = SImode;
+  return gen_rtx_REG (mode, R0_REGNUM);
 }
 
 static rtx
 sra32_libcall_value (machine_mode mode,
 		     const_rtx fun ATTRIBUTE_UNUSED)
 {
+  if (GET_MODE_CLASS (mode) == MODE_INT && GET_MODE_SIZE (mode) < UNITS_PER_WORD)
+    mode = SImode;
   return gen_rtx_REG (mode, R0_REGNUM);
 }
 
@@ -153,14 +157,12 @@ sra32_print_operand (FILE *file, rtx x, int code)
 /* Per-function machine data.  */
 struct GTY(()) machine_function
 {
-   int callee_saved_reg_size;
+  int callee_saved_reg_size;
 
-   int local_vars_size;
+  int local_vars_size;
 
-   int size_for_adjusting_sp;
-
-	 bool rp_needed;
-	 bool fp_needed;
+  bool rp_needed;
+  bool fp_needed;
 };
 
 bool
@@ -188,8 +190,8 @@ sra32_option_override (void)
 static bool
 sra32_rp_needed (void)
 {
-	/* Non-leaf functions clobber RP when they call a function, so they must save/restor their own RP */
-	return !crtl->is_leaf || df_regs_ever_live_p (RP_REGNUM);
+  /* Non-leaf functions clobber RP when they call a function, so they must save/restor their own RP */
+  return !crtl->is_leaf || df_regs_ever_live_p (RP_REGNUM);
 }
 
 /* Compute the size of the local area and the size to be adjusted by the
@@ -198,15 +200,13 @@ sra32_rp_needed (void)
 static void
 sra32_compute_frame (void)
 {
-  /* For aligning the local variables.  */
   int stack_alignment = STACK_BOUNDARY / BITS_PER_UNIT;
   int padding_locals;
   int regno;
 
-  /* Padding needed for each element of the frame.  */
   cfun->machine->local_vars_size = get_frame_size ();
 
-  /* Align to the stack alignment.  */
+  // Align the stack.
   padding_locals = cfun->machine->local_vars_size % stack_alignment;
   if (padding_locals)
     padding_locals = stack_alignment - padding_locals;
@@ -217,54 +217,15 @@ sra32_compute_frame (void)
 
   /* Save callee-saved registers.  */
   for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++) {
-		if (regno == RP_REGNUM || regno == FP_REGNUM)
-			continue; // Handled explicitly later
+    if (regno == RP_REGNUM || regno == FP_REGNUM)
+      continue; // Handled explicitly later
 
-    if (df_regs_ever_live_p (regno) && (! call_used_or_fixed_reg_p (regno)))
+    if (df_regs_ever_live_p (regno) && !call_used_or_fixed_reg_p (regno))
       cfun->machine->callee_saved_reg_size += 4;
-	}
+  }
 
-	cfun->machine->rp_needed = sra32_rp_needed();
-	cfun->machine->fp_needed = frame_pointer_needed;
-
-  cfun->machine->size_for_adjusting_sp =
-    crtl->args.pretend_args_size
-    + cfun->machine->local_vars_size
-    + (ACCUMULATE_OUTGOING_ARGS
-       ? (HOST_WIDE_INT) crtl->outgoing_args_size : 0);
-}
-
-static void
-sra32_adjust_sp (HOST_WIDE_INT delta, bool frame_related)
-{
-	rtx insn;
-	HOST_WIDE_INT magnitude = (delta > 0) ? delta : -delta; // Delta > 0 shrinks the stack (prologue)
-								// Delta < 0 grows it back (epilogue)
-
-	if (magnitude == 0) return;
-
-	if (magnitude > 3 * SRA32_MAX_IMM12)
-		{
-			rtx tmp = gen_rtx_REG (SImode, TMP_REGNUM);
-			insn = emit_move_insn (tmp, GEN_INT (magnitude));
-			if (frame_related) RTX_FRAME_RELATED_P (insn) = 1;
-
-			insn = emit_insn (delta > 0
-					   ? gen_subsi3 (stack_pointer_rtx, stack_pointer_rtx, tmp)
-												 : gen_addsi3 (stack_pointer_rtx, stack_pointer_rtx, tmp));
-			if (frame_related) RTX_FRAME_RELATED_P (insn) = 1;
-			return;
-		}
-
-	while (magnitude > 0)
-		{
-			HOST_WIDE_INT chunk = MIN (magnitude, SRA32_MAX_IMM12);
-			insn = emit_insn (delta > 0
-					   ? gen_subsi3 (stack_pointer_rtx, stack_pointer_rtx, GEN_INT (chunk))
-												 : gen_addsi3 (stack_pointer_rtx, stack_pointer_rtx, GEN_INT (chunk)));
-			if (frame_related) RTX_FRAME_RELATED_P (insn) = 1;
-			magnitude -= chunk;
-		}
+  cfun->machine->rp_needed = sra32_rp_needed(); // RP isn't needed for a leaf function.
+  cfun->machine->fp_needed = frame_pointer_needed;
 }
 
 void
@@ -275,106 +236,128 @@ sra32_expand_prologue (void)
 
   sra32_compute_frame ();
 
-  if (flag_stack_usage_info)
-    current_function_static_stack_size =
-		  cfun->machine->size_for_adjusting_sp
-			+ cfun->machine->callee_saved_reg_size
-			+ (cfun->machine->rp_needed ? 4 : 0)
-			+ (cfun->machine->fp_needed ? 4 : 0);
+  // Save RP and FP
+  if (cfun->machine->rp_needed)
+    {
+      insn = emit_insn (gen_movsi_push (gen_rtx_REG (Pmode, RP_REGNUM)));
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
 
-	// RP Must be saved before any other register.
-	if (cfun->machine->rp_needed)
-		{
-			insn = emit_insn (gen_movsi_push (gen_rtx_REG (Pmode, RP_REGNUM)));
-			RTX_FRAME_RELATED_P (insn) = 1;
-		}
+  if (cfun->machine->fp_needed)
+    {
+      insn = emit_insn (gen_movsi_push (gen_rtx_REG (Pmode, FP_REGNUM)));
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
 
-	// Old FP next.
-	if (cfun->machine->fp_needed)
-		{
-			insn = emit_insn (gen_movsi_push (gen_rtx_REG (Pmode, FP_REGNUM)));
-			RTX_FRAME_RELATED_P (insn) = 1;
-		}
-
-  /* Remaining callee-saved GPRs.  */
+  // Save callee-saved registers.
   for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
     {
       if (regno == RP_REGNUM || regno == FP_REGNUM) continue;
-			if (df_regs_ever_live_p (regno) && !call_used_or_fixed_reg_p (regno))
-				{
-					insn = emit_insn (gen_movsi_push (gen_rtx_REG (Pmode, regno)));
-					RTX_FRAME_RELATED_P (insn) = 1;
-				}
+      if (df_regs_ever_live_p (regno) && !call_used_or_fixed_reg_p (regno))
+        {
+          insn = emit_insn (gen_movsi_push (gen_rtx_REG (Pmode, regno)));
+          RTX_FRAME_RELATED_P (insn) = 1;
+        }
     }
 
-  // Establish FP pointing just below the saved-register area.
-	if (cfun->machine->fp_needed)
-		{
-			insn = emit_move_insn (frame_pointer_rtx, stack_pointer_rtx);
-			RTX_FRAME_RELATED_P (insn) = 1;
-		}
+  if (cfun->machine->fp_needed)
+    {
+      insn = emit_move_insn (frame_pointer_rtx, stack_pointer_rtx);
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
 
-	// Locals + outgoing args.
-	if (cfun->machine->size_for_adjusting_sp > 0)
-		sra32_adjust_sp (cfun->machine->size_for_adjusting_sp, true);
+  if (get_frame_size() > 0)
+    {
+      // Adjust SP for locals.
+      int locals_size = cfun->machine->local_vars_size;
+      insn = emit_insn (gen_subsi3 (stack_pointer_rtx, stack_pointer_rtx, GEN_INT (locals_size)));
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
 }
 
 void
 sra32_expand_epilogue (void)
 {
-	int regno;
-	rtx insn;
+  int regno;
+  rtx insn;
 
-	sra32_compute_frame ();
+  sra32_compute_frame ();
 
-	// If we have a FP, restoring SP from it is simpler and right even if SP was adjusted dynamically after
-	// the prologue (eg alloca). Otherwise just undo the arithmetic.
-	if (cfun->machine->fp_needed)
-		emit_move_insn (stack_pointer_rtx, frame_pointer_rtx);
-	else if (cfun->machine->size_for_adjusting_sp > 0)
-		sra32_adjust_sp (-cfun->machine->size_for_adjusting_sp, true);
+  if (cfun->machine->fp_needed)
+    {
+      insn = emit_move_insn (stack_pointer_rtx, frame_pointer_rtx);
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
+  else if (get_frame_size() > 0)
+    {
+      // Adjust SP.
+      int locals_size = cfun->machine->local_vars_size;
+      insn = emit_insn (gen_addsi3 (stack_pointer_rtx, stack_pointer_rtx, GEN_INT (locals_size)));
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
 
-	// Pop GPRs in reverse push order.
-	for (regno = FIRST_PSEUDO_REGISTER - 1; regno >= 0; regno--)
-		{
-			if (regno == RP_REGNUM || regno == FP_REGNUM)
-				continue;
-			if (df_regs_ever_live_p (regno) && !call_used_or_fixed_reg_p (regno))
-				emit_insn (gen_movsi_pop (gen_rtx_REG (Pmode, regno)));
-		}
+  // Restore callee-saved registers
+  for (regno = FIRST_PSEUDO_REGISTER - 1; regno >= 0; regno--)
+    {
+      if (regno == RP_REGNUM || regno == FP_REGNUM) continue;
+      if (df_regs_ever_live_p (regno) && !call_used_or_fixed_reg_p (regno))
+        {
+          insn = emit_insn (gen_movsi_pop (gen_rtx_REG (Pmode, regno)));
+          RTX_FRAME_RELATED_P (insn) = 1;
+        }
+    }
 
-	// FP was pushed after RP so pop in order
-	if (cfun->machine->fp_needed)
-		emit_insn (gen_movsi_pop (gen_rtx_REG (Pmode, FP_REGNUM)));
+  // Restore FP and SP
+  if (cfun->machine->fp_needed)
+    {
+      insn = emit_insn (gen_movsi_pop (gen_rtx_REG (Pmode, FP_REGNUM)));
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
 
-	if (cfun->machine->rp_needed)
-		emit_insn (gen_movsi_pop (gen_rtx_REG (Pmode, RP_REGNUM)));
+  if (cfun->machine->rp_needed)
+    {
+      insn = emit_insn (gen_movsi_pop (gen_rtx_REG (Pmode, RP_REGNUM)));
+      RTX_FRAME_RELATED_P (insn) = 1;
+    }
 
-	emit_jump_insn (gen_sra32_return_internal ());
+  emit_jump_insn (gen_sra32_return_internal ());
 }
 
 int
 sra32_initial_elimination_offset (int from, int to)
 {
-	int saved_regs_size;
+  int offset = 0;
 
-	sra32_compute_frame ();
-
-	saved_regs_size = (cfun->machine->rp_needed ? 4 : 0)
-			   + (cfun->machine->fp_needed ? 4 : 0)
-										 + cfun->machine->callee_saved_reg_size;
+  sra32_compute_frame ();
 
 	if (from == FRAME_POINTER_REGNUM && to == HARD_FRAME_POINTER_REGNUM)
-		return 0; // Virtual FP sits right where hard FP is (right above locals).
+		return 0; // Virtual FP sits right where hard FP is.
 
 	if (from == FRAME_POINTER_REGNUM && to == STACK_POINTER_REGNUM)
-		return cfun->machine->size_for_adjusting_sp; // Used when fp_needed is false, so GCC eliminates to sp instead of hard FP.
+		return cfun->machine->local_vars_size;
 
 	if (from == ARG_POINTER_REGNUM && to == HARD_FRAME_POINTER_REGNUM)
-		return saved_regs_size;
+    {
+      offset = crtl->args.pretend_args_size;
+      if (cfun->machine->rp_needed)
+        offset += UNITS_PER_WORD;
+      if (cfun->machine->fp_needed)
+        offset += UNITS_PER_WORD;
+      offset += cfun->machine->callee_saved_reg_size;
+		  return offset;
+    }
 
 	if (from == ARG_POINTER_REGNUM && to == STACK_POINTER_REGNUM)
-		return saved_regs_size + cfun->machine->size_for_adjusting_sp;
+    {
+      offset = crtl->args.pretend_args_size;
+      if (cfun->machine->rp_needed)
+        offset += UNITS_PER_WORD;
+      if (cfun->machine->fp_needed)
+        offset += UNITS_PER_WORD;
+      offset += cfun->machine->callee_saved_reg_size;
+      offset += cfun->machine->local_vars_size;
+		  return offset;
+    }
 
 	gcc_unreachable ();
 }
@@ -382,16 +365,16 @@ sra32_initial_elimination_offset (int from, int to)
 static bool
 sra32_fixed_condition_code_regs (unsigned int *p1, unsigned int *p2)
 {
-	*p1 = CC_REGNUM;
-	*p2 = INVALID_REGNUM;
-	return true;
+  *p1 = CC_REGNUM;
+  *p2 = INVALID_REGNUM;
+  return true;
 }
 
 static bool
 sra32_legitimate_constant_p (machine_mode mode ATTRIBUTE_UNUSED, rtx x ATTRIBUTE_UNUSED)
 {
-	// Every 32 bit constant is represented via li so nothing needs to be pooled
-	return true;
+  // Every 32 bit constant is represented via li so nothing needs to be pooled
+  return true;
 }
 
 static bool
@@ -400,9 +383,9 @@ sra32_reg_ok_for_base_p (const_rtx reg, bool strict_p)
   int regno = REGNO (reg);
   if (strict_p)
     return ((unsigned) regno < FIRST_PSEUDO_REGISTER && HARD_REGNO_OK_FOR_BASE_P (regno))
-	    || ((unsigned) regno >= FIRST_PSEUDO_REGISTER
-		&& reg_renumber[regno] >= 0
-		&& HARD_REGNO_OK_FOR_BASE_P (reg_renumber[regno]));
+      || ((unsigned) regno >= FIRST_PSEUDO_REGISTER
+    && reg_renumber[regno] >= 0
+    && HARD_REGNO_OK_FOR_BASE_P (reg_renumber[regno]));
   else
     return (unsigned) regno >= FIRST_PSEUDO_REGISTER || HARD_REGNO_OK_FOR_BASE_P (regno);
 }
@@ -470,9 +453,21 @@ sra32_modes_tieable_p (machine_mode mode1, machine_mode mode2)
   return GET_MODE_SIZE (mode1) <= 4 && GET_MODE_SIZE (mode2) <= 4;
 }
 
+static machine_mode
+sra32_promote_function_mode (const_tree type ATTRIBUTE_UNUSED,
+                              machine_mode mode,
+                              int *punsignedp ATTRIBUTE_UNUSED,
+                              const_tree funtype ATTRIBUTE_UNUSED,
+                              int for_return ATTRIBUTE_UNUSED)
+{
+  if (GET_MODE_CLASS (mode) == MODE_INT && GET_MODE_SIZE (mode) < UNITS_PER_WORD)
+    return SImode;
+  return mode;
+}
+
 static bool
 sra32_cannot_change_mode_class (machine_mode from ATTRIBUTE_UNUSED, machine_mode to ATTRIBUTE_UNUSED,
-				enum reg_class rclass ATTRIBUTE_UNUSED)
+        enum reg_class rclass ATTRIBUTE_UNUSED)
 {
   return false;
 }
@@ -495,21 +490,15 @@ sra32_truly_noop_truncation (poly_uint64 outprec ATTRIBUTE_UNUSED, poly_uint64 i
   return true;
 }
 
-#define SRA32_NUM_ARG_REGS 12
-#define SRA32_ARG_REG(N) (R15_REGNUM + (N))
-
 #define SRA32_ARG_WORDS(MODE, TYPE) \
-	(((MODE) != BLKmode \
-		? GET_MODE_SIZE (MODE) : (unsigned) int_size_in_bytes (TYPE)) \
-	 + UNITS_PER_WORD - 1) / UNITS_PER_WORD
+  (((MODE) != BLKmode \
+    ? GET_MODE_SIZE (MODE) : (unsigned) int_size_in_bytes (TYPE)) \
+    + UNITS_PER_WORD - 1) / UNITS_PER_WORD
 
 static rtx
 sra32_function_arg (cumulative_args_t cum_v, const function_arg_info &arg)
 {
-  CUMULATIVE_ARGS *cum = get_cumulative_args (cum_v);
-  if (*cum >= SRA32_NUM_ARG_REGS)
-    return NULL_RTX;
-  return gen_rtx_REG (arg.mode, SRA32_ARG_REG (*cum));
+  return NULL_RTX; // Every argument is pushed in the stack.
 }
 
 static void
@@ -526,54 +515,28 @@ sra32_pass_by_reference (cumulative_args_t, const function_arg_info &arg)
     return true;
 
   unsigned HOST_WIDE_INT size = arg.type_size_in_bytes ();
-  return size > (UNITS_PER_WORD * SRA32_NUM_ARG_REGS);
+  return size > UNITS_PER_WORD;
 }
 
 static int
 sra32_arg_partial_bytes (cumulative_args_t cum_v, const function_arg_info &arg)
 {
-  CUMULATIVE_ARGS *cum = get_cumulative_args (cum_v);
-  int bytes_left = 0, size = 0;
+  return 0; // disabled for now
+}
 
-  if (*cum >= SRA32_NUM_ARG_REGS)
-    return 0;
-
-  if (sra32_pass_by_reference (cum_v, arg))
-    size = UNITS_PER_WORD;
-  else if (arg.type)
-    {
-      if (AGGREGATE_TYPE_P (arg.type))
-	return 0;
-      size = int_size_in_bytes (arg.type);
-    }
-  else
-    size = GET_MODE_SIZE (arg.mode);
-
-  bytes_left = (SRA32_NUM_ARG_REGS - *cum) * UNITS_PER_WORD;
-  return (size > bytes_left) ? bytes_left : 0;
+static tree
+sra32_build_builtin_va_list (void)
+{
+  return build_pointer_type (char_type_node);
 }
 
 static void
-sra32_setup_incoming_varargs (cumulative_args_t cum_v, const function_arg_info &,
-			       int *pretend_size, int no_rtl)
+sra32_expand_builtin_va_start(tree valist, rtx nextarg)
 {
-  CUMULATIVE_ARGS *cum = get_cumulative_args (cum_v);
-  int regno;
-  int regs_left = SRA32_NUM_ARG_REGS - *cum;
-
-  *pretend_size = (regs_left < 0) ? 0 : UNITS_PER_WORD * regs_left;
-  if (no_rtl)
-    return;
-
-  for (regno = *cum; regno < SRA32_NUM_ARG_REGS; regno++)
-    {
-      rtx reg = gen_rtx_REG (SImode, SRA32_ARG_REG (regno));
-      rtx addr = plus_constant (Pmode, arg_pointer_rtx, UNITS_PER_WORD * regno);
-      rtx mem = gen_rtx_MEM (SImode, addr);
-      set_mem_align (mem, BITS_PER_WORD);
-      MEM_NOTRAP_P (mem) = 1;
-      emit_move_insn (mem, reg);
-    }
+  tree t = build2 (MODIFY_EXPR, TREE_TYPE (valist), valist,
+                    make_tree (TREE_TYPE (valist), nextarg));
+  TREE_SIDE_EFFECTS (t) = 1;
+  expand_expr (t, const0_rtx, VOIDmode, EXPAND_NORMAL);
 }
 
 rtx
@@ -697,14 +660,19 @@ sra32_expand_movcc (rtx *operands)
 #define TARGET_HARD_REGNO_NREGS sra32_hard_regno_nregs
 #undef TARGET_MODES_TIEABLE_P
 #define TARGET_MODES_TIEABLE_P sra32_modes_tieable_p
+#undef TARGET_PROMOTE_FUNCTION_MODE
+#define TARGET_PROMOTE_FUNCTION_MODE sra32_promote_function_mode
 #undef TARGET_CANNOT_CHANGE_MODE_CLASS
 #define TARGET_CANNOT_CHANGE_MODE_CLASS sra32_cannot_change_mode_class
+
 #undef TARGET_STARTING_FRAME_OFFSET
 #define TARGET_STARTING_FRAME_OFFSET sra32_starting_frame_offset
 #undef TARGET_FRAME_POINTER_REQUIRED
 #define TARGET_FRAME_POINTER_REQUIRED sra32_frame_pointer_required
+
 #undef TARGET_TRULY_NOOP_TRUNCATION
 #define TARGET_TRULY_NOOP_TRUNCATION sra32_truly_noop_truncation
+
 #undef TARGET_FUNCTION_ARG
 #define TARGET_FUNCTION_ARG sra32_function_arg
 #undef TARGET_FUNCTION_ARG_ADVANCE
@@ -713,8 +681,11 @@ sra32_expand_movcc (rtx *operands)
 #define TARGET_PASS_BY_REFERENCE sra32_pass_by_reference
 #undef TARGET_ARG_PARTIAL_BYTES
 #define TARGET_ARG_PARTIAL_BYTES sra32_arg_partial_bytes
-#undef TARGET_SETUP_INCOMING_VARARGS
-#define TARGET_SETUP_INCOMING_VARARGS sra32_setup_incoming_varargs
+
+#undef  TARGET_EXPAND_BUILTIN_VA_START
+#define TARGET_EXPAND_BUILTIN_VA_START sra32_expand_builtin_va_start
+#undef  TARGET_BUILD_BUILTIN_VA_LIST
+#define TARGET_BUILD_BUILTIN_VA_LIST sra32_build_builtin_va_list
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 
