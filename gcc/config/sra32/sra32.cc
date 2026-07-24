@@ -524,6 +524,13 @@ sra32_arg_partial_bytes (cumulative_args_t cum_v, const function_arg_info &arg)
   return 0; // disabled for now
 }
 
+static void
+sra32_setup_incoming_varargs (cumulative_args_t cum_v, const function_arg_info &,
+			       int *pretend_size, int no_rtl)
+{
+  *pretend_size = 0;
+}
+
 static tree
 sra32_build_builtin_va_list (void)
 {

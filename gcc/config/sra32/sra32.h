@@ -196,7 +196,6 @@ enum reg_class
 
 #define INCOMING_RETURN_ADDR_RTX gen_rtx_REG (Pmode, RP_REGNUM)
 
-// Is this fine?
 #define RETURN_ADDR_RTX(COUNT, FRAMEADDR) \
   sra32_return_addr_rtx ((COUNT), (FRAMEADDR))
 
@@ -213,7 +212,7 @@ enum reg_class
    faster than accessing a word of memory.  */
 #define SLOW_BYTE_ACCESS 1
 
-#define STORE_FLAG_VALUE                        1
+#define STORE_FLAG_VALUE 1
 
 #define BITS_PER_UNIT 8
 #define BITS_PER_WORD 32
