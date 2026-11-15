@@ -288,6 +288,24 @@
   ""
   "sub\t%0, $x0, %1")
 
+;; Byte swaps
+(define_insn "bswapsi2"
+  [(set (match_operand:SI 0 "register_operand" "=r")
+        (bswap:SI (match_operand:SI 1 "register_operand" "r")))]
+  ""
+  "bswp\t%0, %1")
+
+(define_expand "bswaphi2"
+  [(set (match_operand:HI 0 "register_operand")
+        (bswap:HI (match_operand:HI 1 "register_operand")))]
+  ""
+{
+  rtx tmp = gen_reg_rtx (SImode);
+  emit_insn (gen_bswapsi2 (tmp, gen_lowpart (SImode, operands[1])));
+  emit_insn (gen_lshrsi3 (gen_lowpart (SImode, operands[0]), tmp, GEN_INT (16)));
+  DONE;
+})
+
 ;; Comparisons / branches
 
 (define_insn "cmpsi"
